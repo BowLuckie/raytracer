@@ -14,9 +14,9 @@ struct Light {
 
 struct Material {
   Vec3f diffuse_color;
-  Vec2f albedo;
+  Vec3f albedo;
   float spectural_exponant;
-  Material(const Vec2f& a, const Vec3f& color, const float& spec)
+  Material(const Vec3f& a, const Vec3f& color, const float& spec)
       : albedo(a), spectural_exponant(spec), diffuse_color(color) {}
   Material() : albedo(), diffuse_color(), spectural_exponant() {}
 };
@@ -68,15 +68,22 @@ bool scene_intersect(const Vec3f& orig,
 Vec3f cast_ray(const Vec3f& orig,
                const Vec3f& dir,
                const std::vector<Sphere>& spheres,
-               const std::vector<Light>& lights) {
+               const std::vector<Light>& lights,
+               size_t depth = 0) {
   Vec3f point, N;
   Material material;
 
   Vec3f bg_color = Vec3f(0.2, 0.7, 0.8);
 
-  if (!scene_intersect(orig, dir, spheres, point, N, material)) {
+  if (depth > 4 || !scene_intersect(orig, dir, spheres, point, N, material)) {
     return bg_color;
   }
+
+  Vec3f reflect_dir = reflect(dir, N).normalize();
+  Vec3f reflect_orig =
+      reflect_dir * N < 0 ? point - N * 1e-3 : point + N * 1e-3;
+  Vec3f reflect_color =
+      cast_ray(reflect_orig, reflect_dir, spheres, lights, depth + 1);
 
   float diffuse_light_intensity = 0, spectural_light_intensity = 0;
   for (size_t i = 0; i < lights.size(); i++) {
@@ -102,7 +109,8 @@ Vec3f cast_ray(const Vec3f& orig,
   }
 
   return material.diffuse_color * diffuse_light_intensity * material.albedo[0] +
-         Vec3f(1., 1., 1.) * material.albedo[1] * spectural_light_intensity;
+         Vec3f(1., 1., 1.) * material.albedo[1] * spectural_light_intensity +
+         reflect_color * material.albedo[2];
 }
 
 void render(const std::vector<Sphere>& spheres,
@@ -139,20 +147,23 @@ void render(const std::vector<Sphere>& spheres,
 }
 
 int main() {
-  Material ivory(Vec2f(0.9, 0.1), Vec3f(0.4, 0.4, 0.3), 30);
-  Material red(Vec2f(0.8, 0.5), Vec3f(0.75, 0.10, 0.20), 80);
-  Material blue(Vec2f(0.7, 0.7), Vec3f(0.10, 0.20, 0.75), 150);
-  Material green(Vec2f(0.9, 0.2), Vec3f(0.10, 0.65, 0.20), 40);
-  Material yellow(Vec2f(0.6, 0.9), Vec3f(0.80, 0.75, 0.15), 200);
-  Material cyan(Vec2f(0.8, 0.6), Vec3f(0.10, 0.70, 0.70), 120);
-  Material purple(Vec2f(0.75, 0.7), Vec3f(0.55, 0.20, 0.70), 100);
-  Material orange(Vec2f(0.85, 0.4), Vec3f(0.85, 0.45, 0.10), 60);
+  Material ivory(Vec3f(0.9, 0.1, 0.05), Vec3f(0.4, 0.4, 0.3), 30);
+  Material red(Vec3f(0.8, 0.5, 0.05), Vec3f(0.75, 0.10, 0.20), 80);
+  Material blue(Vec3f(0.7, 0.3, .3), Vec3f(0.10, 0.20, 0.75), 150);
+  Material green(Vec3f(0.9, 0.2, 0), Vec3f(0.10, 0.65, 0.20), 40);
+  Material yellow(Vec3f(0.6, 0.9, 0.05), Vec3f(0.80, 0.75, 0.15), 200);
+  Material cyan(Vec3f(0.8, 0.6, 0.05), Vec3f(0.10, 0.70, 0.70), 120);
+  Material purple(Vec3f(0.75, 0.7, 0.05), Vec3f(0.55, 0.20, 0.70), 100);
+  Material orange(Vec3f(0.85, 0.4, 0.05), Vec3f(0.85, 0.45, 0.10), 60);
+
+  Material mirror(Vec3f(0.0, 10.0, 0.8), Vec3f(1.0, 1.0, 1.0), 1425);
 
   std::vector<Sphere> spheres;
   spheres.push_back(Sphere(Vec3f(-4.5, 2.0, -18), 2.5, blue));
   spheres.push_back(Sphere(Vec3f(2.2, -2.0, -13), 1.8, red));
   spheres.push_back(Sphere(Vec3f(0.0, 1.5, -22), 3.2, green));
   spheres.push_back(Sphere(Vec3f(5.8, -0.8, -17), 2.7, orange));
+  spheres.push_back(Sphere(Vec3f(7, 5, -18), 4, mirror));
 
   std::vector<Light> lights;
   lights.push_back(Light(Vec3f(-20, 20, 20), 1.5));
