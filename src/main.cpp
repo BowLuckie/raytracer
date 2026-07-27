@@ -85,7 +85,23 @@ bool scene_intersect(const Vec3f& orig,
       material = spheres[i].material;
     }
   }
-  return sphere_distance < 1000;
+
+  float checkerboard_dist = std::numeric_limits<float>::max();
+  if (std::fabs(dir.y) > 1e-3) {
+    float d = -(orig.y + 4) / dir.y;
+    Vec3f pt = orig + dir * d;
+    if (d > 0 && std::fabs(pt.x) < 10 && pt.z < -10 && pt.z > -30 &&
+        d < sphere_distance) {
+      checkerboard_dist = d;
+      hit = pt;
+      N = Vec3f(0, 1, 0);
+      material.diffuse_color = (int(.5 * hit.x + 1000) + int(.5 * hit.z)) & 1
+                                   ? Vec3f(1, 1, 1)
+                                   : Vec3f(1, .7, .3);
+      material.diffuse_color = material.diffuse_color * .3;
+    }
+  }
+  return std::min(sphere_distance, checkerboard_dist) < 1000;
 }
 
 Vec3f cast_ray(const Vec3f& orig,
@@ -150,12 +166,14 @@ void render(const std::vector<Sphere>& spheres,
   const int fov = M_PI / 2;
   std::vector<Vec3f> framebuffer(WIDTH * HEIGHT);
 
+#pragma omp parallel for
   for (size_t h = 0; h < HEIGHT; h++) {
     for (size_t w = 0; w < WIDTH; w++) {
       float x = (2 * (w + 0.5) / (float)WIDTH - 1) * tan(fov / 2.) * WIDTH /
                 (float)HEIGHT;
       float y = -(2 * (h + 0.5) / (float)HEIGHT - 1) * tan(fov / 2.);
       Vec3f dir = Vec3f(x, y, -1).normalize();
+
       framebuffer[w + h * WIDTH] =
           cast_ray(Vec3f(0, 0, 0), dir, spheres, lights);
     }
