@@ -4,8 +4,15 @@
 #include <cstddef>
 #include <fstream>
 #include <limits>
+#include <raylib.h>
 #include <utility>
 #include <vector>
+
+struct View {
+  const int WIDTH = 1024;
+  const int HEIGHT = 768;
+  const float fov = M_PI / 2;
+};
 
 struct Light {
   Vec3f position;
@@ -13,18 +20,18 @@ struct Light {
   Light(const Vec3f& p, const float& i) : position(p), intensity(i) {}
 };
 
-struct Material {
+struct RayMaterial {
   Vec3f diffuse_color;
   Vec4f albedo;
   float specural_exponant;
   float refractive_index;
-  Material(const float& r,
-           const Vec4f& a,
-           const Vec3f& color,
-           const float& spec)
+  RayMaterial(const float& r,
+              const Vec4f& a,
+              const Vec3f& color,
+              const float& spec)
       : refractive_index(r), albedo(a), specural_exponant(spec),
         diffuse_color(color) {}
-  Material()
+  RayMaterial()
       : refractive_index(1), albedo(1, 0, 0, 0), diffuse_color(),
         specural_exponant() {}
 };
@@ -32,9 +39,9 @@ struct Material {
 struct Sphere {
   Vec3f center;
   float radius;
-  Material material;
+  RayMaterial material;
 
-  Sphere(const Vec3f& c, const float& r, const Material& m)
+  Sphere(const Vec3f& c, const float& r, const RayMaterial& m)
       : center(c), radius(r), material(m) {}
 
   bool ray_intersect(const Vec3f& orig, const Vec3f& dir, float& t0) const {
@@ -48,6 +55,36 @@ struct Sphere {
     if (t0 < 0) t0 = t1;
     if (t0 < 0) return false;
     return true;
+  }
+};
+
+struct Board {
+  int lower_bound;
+  int upper_bound;
+  int width;
+  int ypos;
+  RayMaterial material1;
+  RayMaterial material2;
+
+  Board(const int& lower_bound,
+        const int& upper_bound,
+        const int& width,
+        const int& ypos,
+        const RayMaterial& m1,
+        const RayMaterial& m2)
+      : lower_bound(lower_bound), upper_bound(upper_bound), width(width),
+        ypos(ypos), material1(m1), material2(m2) {}
+
+  bool ray_intersect(const Vec3f& orig, const Vec3f& dir, float& d) const {
+    float checkerboard_dist = std::numeric_limits<float>::max();
+    if (std::fabs(dir.y) > 1e-3) {
+      d = -(orig.y + ypos) / dir.y;
+      Vec3f pt = orig + dir * d;
+      return (d > 0 && std::fabs(pt.x) < width && pt.z < lower_bound &&
+              pt.z > upper_bound);
+    }
+
+    return false;
   }
 };
 
@@ -71,9 +108,10 @@ Vec3f refract(const Vec3f& I, const Vec3f& N, const float& refractive_index) {
 bool scene_intersect(const Vec3f& orig,
                      const Vec3f& dir,
                      const std::vector<Sphere>& spheres,
+                     const std::vector<Board>& boards,
                      Vec3f& hit,
                      Vec3f& N,
-                     Material& material) {
+                     RayMaterial& material) {
   float sphere_distance = std::numeric_limits<float>::max();
   for (size_t i = 0; i < spheres.size(); i++) {
     float dist_i;
@@ -85,20 +123,20 @@ bool scene_intersect(const Vec3f& orig,
       material = spheres[i].material;
     }
   }
-
   float checkerboard_dist = std::numeric_limits<float>::max();
   if (std::fabs(dir.y) > 1e-3) {
-    float d = -(orig.y + 4) / dir.y;
-    Vec3f pt = orig + dir * d;
-    if (d > 0 && std::fabs(pt.x) < 10 && pt.z < -10 && pt.z > -30 &&
-        d < sphere_distance) {
-      checkerboard_dist = d;
-      hit = pt;
-      N = Vec3f(0, 1, 0);
-      material.diffuse_color = (int(.5 * hit.x + 1000) + int(.5 * hit.z)) & 1
-                                   ? Vec3f(1, 1, 1)
-                                   : Vec3f(1, .7, .3);
-      material.diffuse_color = material.diffuse_color * .3;
+    for (size_t i = 0; i < boards.size(); i++) {
+      float dist_i;
+      if (boards[i].ray_intersect(orig, dir, dist_i) &&
+          dist_i < checkerboard_dist && dist_i < sphere_distance) {
+        checkerboard_dist = dist_i;
+        hit = orig + dir * dist_i;
+        N = Vec3f(0, 1, 0);
+        material = (int(.5 * hit.x + 1000) + int(.5 * hit.z)) & 1
+                       ? boards[i].material1
+                       : boards[i].material2;
+        material.diffuse_color = material.diffuse_color * .3;
+      }
     }
   }
   return std::min(sphere_distance, checkerboard_dist) < 1000;
@@ -107,14 +145,16 @@ bool scene_intersect(const Vec3f& orig,
 Vec3f cast_ray(const Vec3f& orig,
                const Vec3f& dir,
                const std::vector<Sphere>& spheres,
+               const std::vector<Board>& boards,
                const std::vector<Light>& lights,
                size_t depth = 0) {
   Vec3f point, N;
-  Material material;
+  RayMaterial material;
 
   Vec3f bg_color = Vec3f(0.2, 0.7, 0.8);
 
-  if (depth > 4 || !scene_intersect(orig, dir, spheres, point, N, material)) {
+  if (depth > 4 ||
+      !scene_intersect(orig, dir, spheres, boards, point, N, material)) {
     return bg_color;
   }
 
@@ -127,9 +167,9 @@ Vec3f cast_ray(const Vec3f& orig,
       refract_dir * N < 0 ? point - N * 1e-3 : point + N * 1e-3;
 
   Vec3f reflect_color =
-      cast_ray(reflect_orig, reflect_dir, spheres, lights, depth + 1);
+      cast_ray(reflect_orig, reflect_dir, spheres, boards, lights, depth + 1);
   Vec3f refract_color =
-      cast_ray(refract_orig, refract_dir, spheres, lights, depth + 1);
+      cast_ray(refract_orig, refract_dir, spheres, boards, lights, depth + 1);
 
   float diffuse_light_intensity = 0, spectural_light_intensity = 0;
   for (size_t i = 0; i < lights.size(); i++) {
@@ -138,9 +178,9 @@ Vec3f cast_ray(const Vec3f& orig,
 
     Vec3f shadow_orig = light_dir * N < 0 ? point - N * 1e-3 : point + N * 1e-3;
     Vec3f shadow_pt, shadow_N;
-    Material m;
-    if (scene_intersect(shadow_orig, light_dir, spheres, shadow_pt, shadow_N,
-                        m) &&
+    RayMaterial m;
+    if (scene_intersect(shadow_orig, light_dir, spheres, boards, shadow_pt,
+                        shadow_N, m) &&
         (shadow_pt - shadow_orig).norm() < light_dist) {
       continue;
     }
@@ -159,11 +199,14 @@ Vec3f cast_ray(const Vec3f& orig,
          refract_color * material.albedo[3];
 }
 
-void render(const std::vector<Sphere>& spheres,
-            const std::vector<Light>& lights) {
-  const int WIDTH = 1024;
-  const int HEIGHT = 768;
-  const int fov = M_PI / 2;
+std::vector<Vec3f> render(const std::vector<Sphere>& spheres,
+                          const std::vector<Board>& boards,
+                          const std::vector<Light>& lights,
+                          const View& view) {
+  const int WIDTH = view.WIDTH;
+  const int HEIGHT = view.HEIGHT;
+  const int fov = view.fov;
+
   std::vector<Vec3f> framebuffer(WIDTH * HEIGHT);
 
 #pragma omp parallel for
@@ -175,12 +218,19 @@ void render(const std::vector<Sphere>& spheres,
       Vec3f dir = Vec3f(x, y, -1).normalize();
 
       framebuffer[w + h * WIDTH] =
-          cast_ray(Vec3f(0, 0, 0), dir, spheres, lights);
+          cast_ray(Vec3f(0, 0, 0), dir, spheres, boards, lights);
     }
   }
 
+  return framebuffer;
+}
+
+void draw_ppm(std::vector<Vec3f> framebuffer, View& view, char* path) {
+  const int WIDTH = view.WIDTH;
+  const int HEIGHT = view.HEIGHT;
+
   std::ofstream ofs;
-  ofs.open("./out.ppm");
+  ofs.open(path);
   ofs << "P6\n" << WIDTH << " " << HEIGHT << "\n255\n";
   for (size_t i = 0; i < WIDTH * HEIGHT; ++i) {
     Vec3f& c = framebuffer[i];
@@ -194,20 +244,56 @@ void render(const std::vector<Sphere>& spheres,
   ofs.close();
 }
 
+void draw_raylib(std::vector<Vec3f>& framebuffer, View& view) {
+  const int WIDTH = view.WIDTH;
+  const int HEIGHT = view.HEIGHT;
+
+  Image image = GenImageColor(WIDTH, HEIGHT, BLACK);
+
+  Color* pixels = (Color*)image.data;
+
+  for (size_t i = 0; i < WIDTH * HEIGHT; i++) {
+    Vec3f& c = framebuffer[i];
+
+    float max = std::max(c[0], std::max(c[1], c[2]));
+    if (max > 1) c = c * (1.0f / max);
+
+    pixels[i] = {(unsigned char)(255 * std::clamp(c[0], 0.0f, 1.0f)),
+                 (unsigned char)(255 * std::clamp(c[1], 0.0f, 1.0f)),
+                 (unsigned char)(255 * std::clamp(c[2], 0.0f, 1.0f)), 255};
+  }
+
+  Texture2D texture = LoadTextureFromImage(image);
+  UnloadImage(image);
+
+  while (!WindowShouldClose()) {
+    BeginDrawing();
+    ClearBackground(BLACK);
+
+    DrawTexture(texture, 0, 0, WHITE);
+
+    EndDrawing();
+  }
+
+  UnloadTexture(texture);
+}
+
 int main() {
-  Material ivory(1.0, Vec4f(0.9, 0.1, 0.05, 0.0), Vec3f(0.4, 0.4, 0.3), 30);
-  Material red(1.0, Vec4f(0.8, 0.5, 0.05, 0.0), Vec3f(0.75, 0.10, 0.20), 80);
-  Material blue(1.0, Vec4f(0.7, 0.3, 0.3, 0.0), Vec3f(0.10, 0.20, 0.75), 150);
-  Material green(1.0, Vec4f(0.9, 0.2, 0.0, 0.0), Vec3f(0.10, 0.65, 0.20), 40);
-  Material yellow(1.0, Vec4f(0.6, 0.9, 0.05, 0.0), Vec3f(0.80, 0.75, 0.15),
-                  200);
-  Material cyan(1.0, Vec4f(0.8, 0.6, 0.05, 0.0), Vec3f(0.10, 0.70, 0.70), 120);
-  Material purple(1.0, Vec4f(0.75, 0.7, 0.05, 0.0), Vec3f(0.55, 0.20, 0.70),
-                  100);
-  Material orange(1.0, Vec4f(0.85, 0.4, 0.05, 0.0), Vec3f(0.85, 0.45, 0.10),
-                  60);
-  Material mirror(1.0, Vec4f(0.0, 10.0, 0.8, 0.0), Vec3f(1.0, 1.0, 1.0), 1425);
-  Material glass(1.5, Vec4f(0.0, 0.5, 0.1, 0.8), Vec3f(0.6, 0.7, 0.8), 125.);
+  View view{1024, 768, M_PI / 2};
+  InitWindow(view.WIDTH, view.HEIGHT, "Raytracer");
+
+  // clang-format off
+  RayMaterial ivory(1.0, Vec4f(0.9, 0.1, 0.05, 0.0), Vec3f(0.4, 0.4, 0.3), 30);
+  RayMaterial red(1.0, Vec4f(0.8, 0.5, 0.05, 0.0), Vec3f(0.75, 0.10, 0.20), 80);
+  RayMaterial blue(1.0, Vec4f(0.7, 0.3, 0.3, 0.0), Vec3f(0.10, 0.20, 0.75), 150);
+  RayMaterial green(1.0, Vec4f(0.9, 0.2, 0.0, 0.0), Vec3f(0.10, 0.65, 0.20), 40);
+  RayMaterial yellow(1.0, Vec4f(0.6, 0.9, 0.05, 0.0), Vec3f(0.80, 0.75, 0.15), 200);
+  RayMaterial cyan(1.0, Vec4f(0.8, 0.6, 0.05, 0.0), Vec3f(0.10, 0.70, 0.70), 120);
+  RayMaterial purple(1.0, Vec4f(0.75, 0.7, 0.05, 0.0), Vec3f(0.55, 0.20, 0.70), 100);
+  RayMaterial orange(1.0, Vec4f(0.85, 0.4, 0.05, 0.0), Vec3f(0.85, 0.45, 0.10), 60);
+  RayMaterial mirror(1.0, Vec4f(0.0, 10.0, 0.8, 0.0), Vec3f(1.0, 1.0, 1.0), 1425);
+  RayMaterial glass(1.5, Vec4f(0.0, 0.5, 0.1, 0.8), Vec3f(0.6, 0.7, 0.8), 125.);
+  // clang-format on
 
   std::vector<Sphere> spheres;
   spheres.push_back(Sphere(Vec3f(-4.5, 2.0, -18), 2.5, blue));
@@ -217,12 +303,18 @@ int main() {
   spheres.push_back(Sphere(Vec3f(5.8, -0.8, -17), 2.7, orange));
   spheres.push_back(Sphere(Vec3f(7, 5, -18), 4, mirror));
 
+  std::vector<Board> boards;
+  boards.push_back(Board(-10, -30, 10, 4, blue, red));
+
   std::vector<Light> lights;
   lights.push_back(Light(Vec3f(-20, 20, 20), 1.5));
   lights.push_back(Light(Vec3f(30, 50, -25), 1.8));
   lights.push_back(Light(Vec3f(30, 20, 30), 1.7));
 
-  render(spheres, lights);
+  std::vector<Vec3f> framebuffer = render(spheres, boards, lights, view);
+  draw_raylib(framebuffer, view);
+
+  CloseWindow();
 
   return 0;
 }
